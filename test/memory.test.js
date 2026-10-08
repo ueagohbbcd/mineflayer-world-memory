@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { mkdtemp, rm } = require('node:fs/promises')
+const { mkdtemp, rm, readdir } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const path = require('node:path')
 const { createWorldMemory, coverageRectangles } = require('..')
@@ -84,4 +84,20 @@ test('background work completes and updates received during refresh do not inval
   const before = memory.summary().revision
   assert.equal(memory.summary().revision, before)
   await memory.dispose()
+})
+test('repeated dispose shares a promise and waits for pending native persistence', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'world-memory-close-'))
+  try {
+    const c = column(); put(c, 4, 106, 14, 'nether_portal')
+    const bot = fixture(new Map([['-6,1', c]]))
+    const memory = createWorldMemory(bot, { directory, worldId: 'closing' })
+    const first = memory.dispose(), second = memory.dispose()
+    assert.equal(first, second)
+    await second
+    const saved = await readdir(path.join(directory, Buffer.from('closing').toString('base64url')))
+    assert.equal(saved.filter(file => file.endsWith('.json.gz')).length, 1)
+    const restored = createWorldMemory(fixture(new Map()), { directory, worldId: 'closing' })
+    assert.equal((await restored.find({ name: 'nether_portal' })).total, 1)
+    await restored.dispose()
+  } finally { await rm(directory, { recursive: true, force: true }) }
 })

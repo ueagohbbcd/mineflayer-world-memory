@@ -70,7 +70,7 @@ function createWorldMemory (bot, options = {}) {
   if (options.directory && !options.worldId) throw new Error('worldId is required when persistence is enabled')
   const dimensions = new Map(), listeners = [], now = options.now || Date.now
   const directory = options.directory && path.join(options.directory, Buffer.from(String(options.worldId)).toString('base64url'))
-  let revision = 0, computedRevision = -1, running, disposed = false, error = null, loadedDimension, scheduled
+  let revision = 0, computedRevision = -1, running, disposed = false, error = null, loadedDimension, scheduled, closing
   let snapshot = { revision: 0, dimensions: {}, blockCounts: {}, pending: true }
   const dimension = () => String(bot.game?.dimension || 'overworld')
   const map = d => { if (!dimensions.has(d)) dimensions.set(d, new Map()); return dimensions.get(d) }
@@ -221,6 +221,7 @@ function createWorldMemory (bot, options = {}) {
       }
       snapshot = { revision: target, dimensions: output, blockCounts: total }; computedRevision = target
       await persist()
+      error = null
       break
     }
     return summary()
@@ -229,7 +230,7 @@ function createWorldMemory (bot, options = {}) {
     if (!running) running = compute().catch(e => { error = e.message; throw e }).finally(() => { running = null; if (computedRevision !== revision && !error) schedule() })
     return running
   }
-  function summary () { return { ...snapshot, currentDimension: dimension(), entities: options.entities?.() || [], pending: computedRevision !== revision, error } }
+  function summary () { return { entities: options.entities?.() || [], blockCounts: snapshot.blockCounts, dimensions: snapshot.dimensions, revision: snapshot.revision, currentDimension: dimension(), pending: computedRevision !== revision, error } }
   async function find ({ name, dimension: requested = dimension(), limit = 100 } = {}) {
     await refresh(); const positions = []; let total = 0
     limit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : Infinity
@@ -248,16 +249,19 @@ function createWorldMemory (bot, options = {}) {
     }
     return { positions, total, remaining: total - positions.length, revision: computedRevision, pending: computedRevision !== revision }
   }
-  async function dispose () {
-    if (disposed) return
+  function dispose () {
+    if (closing) return closing
     disposed = true; if (scheduled) clearImmediate(scheduled)
     for (const [e, fn] of listeners) bot.off(e, fn)
-    await ready; if (running) await running; await persist()
-    let changed = false
-    for (const records of dimensions.values()) for (const r of records.values()) if (r.loaded) { r.loaded = false; changed = true }
-    if (changed) revision++
-    snapshot = { ...snapshot, revision, dimensions: Object.fromEntries(Object.entries(snapshot.dimensions).map(([d, facts]) => [d, { ...facts, loadedChunks: 0, currentCoverage: [] }])) }
-    computedRevision = revision
+    closing = (async () => {
+      await ready; if (running) await running; await persist()
+      let changed = false
+      for (const records of dimensions.values()) for (const r of records.values()) if (r.loaded) { r.loaded = false; changed = true }
+      if (changed) revision++
+      snapshot = { ...snapshot, revision, dimensions: Object.fromEntries(Object.entries(snapshot.dimensions).map(([d, facts]) => [d, { ...facts, loadedChunks: 0, currentCoverage: [] }])) }
+      computedRevision = revision
+    })()
+    return closing
   }
   return { summary, refresh, find, chunk: ({ x, z, dimension: d = dimension() }) => map(d).get(key(x, z))?.column || null,
     block: ({ x, y, z, dimension: d = dimension() }) => {
