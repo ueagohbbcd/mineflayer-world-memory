@@ -1,0 +1,19 @@
+{
+  "name": "mineflayer-world-memory",
+  "version": "0.1.0",
+  "description": "Persistent exposed-world exploration memory for Mineflayer",
+  "main": "index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "prismarine-chunk": "^1.41.0"
+  },
+  "peerDependencies": {
+    "mineflayer": ">=4.39.0 <5"
+  }
+}
