@@ -101,3 +101,62 @@ test('repeated dispose shares a promise and waits for pending native persistence
     await restored.dispose()
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
+
+test('received same-object native map_chunk invalidates indexes and persistence but ordinary synchronization reuses analysis', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'world-memory-reload-'))
+  const bot = new EventEmitter(); bot._client = new EventEmitter()
+  bot.version = '1.21.1'; bot.registry = registry; bot.supportFeature = registry.supportFeature
+  bot.game = { dimension: 'overworld', minY: 80, height: 32 }
+  require('mineflayer/lib/plugins/blocks')(bot, { version: '1.21.1' })
+  bot._client.emit('login', { worldState: { dimension: 0, name: 'minecraft:overworld' } })
+  const memory = createWorldMemory(bot, { directory, worldId: 'reload' })
+  try {
+    bot._client.emit('map_chunk', { x: 0, z: 0, chunkData: column().dump() })
+    await memory.refresh()
+    const original = bot.world.getColumn(0, 0), before = memory.summary().revision
+    bot.emit('spawn'); await memory.refresh()
+    assert.equal(memory.summary().revision, before)
+    const updated = column(); put(updated, 2, 90, 3, 'nether_portal')
+    bot._client.emit('map_chunk', { x: 0, z: 0, chunkData: updated.dump() })
+    assert.equal(bot.world.getColumn(0, 0), original)
+    assert.equal(memory.summary().pending, true)
+    assert.equal((await memory.find({ name: 'nether_portal' })).total, 1)
+    assert(memory.summary().revision > before)
+    await memory.dispose()
+    const restored = createWorldMemory(fixture(new Map()), { directory, worldId: 'reload' })
+    try { assert.equal((await restored.find({ name: 'nether_portal' })).total, 1) } finally { await restored.dispose() }
+  } finally { await memory.dispose(); await rm(directory, { recursive: true, force: true }) }
+})
+
+test('restore corruption remains observable after successful analysis and later updates', async () => {
+  const { mkdir, writeFile } = require('node:fs/promises')
+  const directory = await mkdtemp(path.join(tmpdir(), 'world-memory-corrupt-'))
+  const scope = path.join(directory, Buffer.from('corrupt').toString('base64url'))
+  await mkdir(scope); await writeFile(path.join(scope, 'broken.json.gz'), 'invalid gzip')
+  const c = column(), bot = fixture(new Map([['0,0', c]]))
+  const memory = createWorldMemory(bot, { directory, worldId: 'corrupt' })
+  try {
+    await memory.refresh()
+    assert.match(memory.summary().error, /Cannot restore broken.json.gz/)
+    put(c, 2, 90, 3, 'dirt')
+    bot.emit('blockUpdate', { stateId: 0 }, { stateId: registry.blocksByName.dirt.minStateId, position: { x: 2, y: 90, z: 3 } })
+    assert.equal((await memory.find({ name: 'dirt' })).total, 1)
+    assert.match(memory.summary().error, /Cannot restore broken.json.gz/)
+    await memory.dispose()
+    assert.match(memory.summary().error, /Cannot restore broken.json.gz/)
+  } finally { await memory.dispose(); await rm(directory, { recursive: true, force: true }) }
+})
+
+test('dispose drains pending block updates before marking the final index current', async () => {
+  const c = column(), bot = fixture(new Map([['0,0', c]])), memory = createWorldMemory(bot)
+  await memory.refresh()
+  put(c, 2, 90, 3, 'nether_portal')
+  bot.emit('blockUpdate', { stateId: 0 }, { stateId: registry.blocksByName.nether_portal.minStateId, position: { x: 2, y: 90, z: 3 } })
+  await memory.dispose()
+  const summary = memory.summary(), found = await memory.find({ name: 'nether_portal' })
+  assert.equal(summary.pending, false)
+  assert.equal(summary.blockCounts.nether_portal, 1)
+  assert.equal(summary.dimensions.overworld.loadedChunks, 0)
+  assert.equal(found.total, 1); assert.equal(found.pending, false)
+  assert.equal(found.positions[0].loaded, false)
+})
