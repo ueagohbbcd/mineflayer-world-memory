@@ -173,9 +173,9 @@ def main(argv=None):
     # Always visible provenance, even if the PNG metadata is stripped downstream.
     labelled = Image.new('RGB', (im.width, im.height + 66), '#101722')
     labelled.paste(im, (0, 0)); draw = ImageDraw.Draw(labelled)
-    for i, line in enumerate(['ROI cut-away | outside is omitted, not known air',
-                              'Display light / fixed biome tint | not measured game light',
-                              'Native cache is source of truth | not a clearance proof']):
+    for i, line in enumerate(['ROI cut-away | outside remains unobserved in this view',
+                              'Fixed display lighting / illustrative biome tint',
+                              'Native cache is source of truth | Check clearance separately']):
         draw.text((8, im.height+6+i*18), line, fill='#d6dfeb')
     info['imageSize'] = list(labelled.size)
     pnginfo = PngImagePlugin.PngInfo()

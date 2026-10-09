@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process')
 const { exportSurface, exportRegion } = require('../lib/visual')
 const help = `World memory: look at a broad surface map, inspect a bounded volume, query only as needed.
 
-world-memory surface --config surface.json     Export cached top textures/biomes (no grid)
+world-memory surface --config surface.json     Export cached top textures/biomes (grid-free)
 world-memory region --config region.json       Export known/unknown XYZ volume for 3D/caves
 world-memory local-mesh --config mesh.json      Optional Prismarine model mesh of a known region
 world-memory render-local --mesh-dir DIR --output NEW.png  CPU textured local 3D
@@ -18,7 +18,7 @@ world-memory compose-cave --workdir CAST_DIR              Combine annotated cave
 Exports are read-only and refuse existing outputs or outputs inside the cache.
 Cache config: directory, worldId, version, dimension, output; surface: bounds [xMin,xMax,zMin,zMax],
 optional y [min,max], maxLayers; region: min/max [X,Y,Z] inclusive. Paths resolve relative to config.
-Python renderers require NumPy/Pillow. Blender is optional for render-cave. No automatic downloads.
+Install renderer dependencies explicitly: Python with NumPy/Pillow; Blender for render-cave.
 Use <command> --help for renderer flags; see docs/visual.md for installation and complete examples.`
 async function main () {
   const [command, ...args] = process.argv.slice(2)

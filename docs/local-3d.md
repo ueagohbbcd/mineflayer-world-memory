@@ -2,16 +2,14 @@
 
 This is an offline, bounded reconstruction from a `world-memory.region.v1`
 export. It uses Prismarine-viewer 1.33.0 blockstate/model geometry and its matching
-texture atlas, then rasterizes on the CPU with NumPy/Pillow. It needs no browser,
-GPU, live server, bot, renderer service, or mcssss. The native complete cache
-remains the source of truth. This image is not a clearance/traversability proof.
+texture atlas, then rasterizes on the CPU with NumPy/Pillow. The native complete
+cache remains the source of truth. Check clearance and traversability separately.
 
 ## Dependencies and paths
 
-The core memory package does **not** import or require the optional viewer.
-Provide a legally obtained local installation of `prismarine-viewer@1.33.0` plus
-Python 3 with NumPy and Pillow. Nothing downloads automatically. Assets are read
-in place and never copied into this repository. Follow the relevant asset
+Install the optional renderer dependencies explicitly: a legally obtained local
+`prismarine-viewer@1.33.0` plus Python 3 with NumPy and Pillow. The core memory
+package is independent of the viewer. Assets are read in place. Follow the relevant asset
 licenses for your installation and redistribution; no right to redistribute
 Minecraft assets is implied.
 
@@ -50,7 +48,7 @@ Mesh stage: `exportLocalMesh({regionDir, output, viewerRoot?, assets?})` returns
 `{output, vertices, triangles, sections}` and writes `mesh.json` plus
 `metadata.json` to a newly created directory. Mesh positions are absolute world
 XYZ, including negative coordinates and cross-chunk geometry. Native state
-properties select model variants; matching does not misclassify stairs as air.
+properties select model variants, including stair geometry.
 A section-aligned internal Y translation avoids the viewer's pre-1.18 Y=0
 culling assumption; output positions are translated back to original world Y.
 
@@ -60,35 +58,34 @@ Raster stage accepts `--mesh-dir`, `--output`, optional `--assets`, `--eye X Y Z
 scale 1, and 40° vertical field of view. A provenance footer is added beneath the
 viewport. PNG text metadata (`world-memory`) includes camera coordinates,
 source/asset hashes, observation stamps, lighting, triangle/pixel counts, and
-limitations. stdout reports render metrics. No grid is overlaid on this view.
+limitations. stdout reports render metrics. This view is grid-free.
 For underground shape inspection with a grid, use the separate air-cast renderer.
 
 ## Meaning and limits
 
-- Unknown inside the ROI is a hard error, including unknown air. Unknown is
-  never silently converted into air. Export a smaller fully known region if
+- Every voxel inside the ROI must be known, including air. Export a smaller fully known region if
   the first export contains unknown cells.
 - Outside the ROI is deliberately omitted for a **cut-away**. The adapter uses
-  empty exterior samples only to expose cut faces. These are not observations
-  and do not establish air, a passage, or actual world boundaries outside the ROI.
+  empty exterior samples to expose cut faces. Space beyond the ROI remains
+  unobserved in this view; passages and world boundaries there need further data.
 - Region v1 has no biome/light arrays. Tint uses a fixed plains display biome;
-  neutral directional light and model ambient occlusion are presentation aids,
-  not measured Minecraft lighting. There are no entities, block entities,
+  neutral directional light and model ambient occlusion provide display lighting.
+  Measured game lighting is unavailable. The view omits entities, block entities,
   particles, animated textures, or live changes.
 - Weighted variants deterministically select their first model. Model/atlas
   versions must match the export version. Missing block models or unmatched
-  variants fail explicitly rather than silently disappear.
+  variants produce explicit errors.
 - The CPU rasterizer uses perspective-correct UVs, depth testing, and back-face
   culling. Alpha below 26/255 is discarded; remaining alpha is treated as opaque.
   Water, stained glass, and other translucency are approximate, without blending.
   Triangles intersecting the near plane are omitted and counted. Move the camera
-  out if `nearPlaneSkippedTriangles` is nonzero. This is not a client screenshot.
+  out if `nearPlaneSkippedTriangles` is nonzero.
 - Work is bounded to 131,072 voxels and 512 sections; mesh accumulation is capped at 262,144 vertices / 786,432 indices and 32 MiB
   JSON. The rasterizer uses 128×128 temporary tiles; images are capped at 4M
   supersampled pixels. Large regions should be split into inspection ROIs.
 - Inputs and assets are read-only. Both stages require new output paths, reject
   overwrites and symlink aliases into their source directories. Put derived
-  files outside the native cache; never use its directory as a rendering target.
+  files outside the native cache.
   Partial outputs from an interrupted write must be discarded or a new path used.
 
 ## Synthetic verification
