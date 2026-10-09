@@ -1,11 +1,13 @@
 import bpy,json,math,pathlib,argparse,sys
 from mathutils import Vector
+from datetime import datetime,timezone
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
 from extract_air_cast import ensure_output_paths,render_settings,read_json_limited,load_air_cast
+from image_output import summarize,compact_air_source
 parser=argparse.ArgumentParser();parser.add_argument('--workdir',required=True);parser.add_argument('--config');args=parser.parse_args(sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [])
 D=pathlib.Path(args.workdir).resolve();g,metadata=load_air_cast(D);cfg=read_json_limited(args.config,1024*1024) if args.config else {}
 if g.get('schema')!='world-memory.air-cast.v1' or metadata.get('schema')!='world-memory.air-cast.metadata.v1':raise ValueError('Unsupported air-cast schema')
-ensure_output_paths(D,['view-1-raw.png','view-2-raw.png','view-1-labels.json','view-2-labels.json','view-1-axes.json','view-2-axes.json','air-cast.blend','render-metadata.json'],metadata['source'])
+ensure_output_paths(D,['view-1-raw.png','view-2-raw.png','view-1-raw.png.json','view-2-raw.png.json','view-1-labels.json','view-2-labels.json','view-1-axes.json','view-2-axes.json','air-cast.blend','render-metadata.json','render-result.json'],metadata['source'])
 if not g.get('vertices') or not g.get('faces'):raise ValueError('Empty geometry')
 if any(not isinstance(v,list) or len(v)!=3 or any(type(c) not in (int,float) or not math.isfinite(c) for c in v) for v in g['vertices']):raise ValueError('Invalid geometry vertex')
 if any(not isinstance(f,list) or len(f)!=4 or any(type(i) is not int or not 0<=i<len(g['vertices']) for i in f) for f in g['faces']):raise ValueError('Invalid quad index')
@@ -70,3 +72,21 @@ for i,az in enumerate(azimuths):
 bpy.ops.wm.save_as_mainfile(filepath=str(D/'air-cast.blend'))
 
 (D/'render-metadata.json').write_text(json.dumps({'azimuths_degrees':azimuths,'elevation_degrees':elevation,'orthographic_scale':cam.data.ortho_scale,'center_blender':list(center),'lights_blender':lights,'grid':not gr.hide_render,'grid_pitch_blocks':1,'grid_radius_blocks':cv.bevel_depth,'resolution':[width,height],'azimuth_reference':'East=0, North=90','lighting':'Fixed world studio lighting, not measured Minecraft light','world_light_fixed':True,'same_camera_scale':True,'projected_geometry_bounds':projected_geometry_bounds,'camera_distance':settings['camera_distance'],'bounding_radius':settings['bounding_radius'],'clip_start':settings['clip_start'],'clip_end':settings['clip_end'],'sensor_fit':settings['sensor_fit'],'default_fit_scale':settings['default_fit_scale'],'manual_scale_may_clip':settings['manual_scale_may_clip'],'boundary_colors':{'crop_known_air':'gold','unknown_boundary':'purple'},'boundary_counts':metadata['boundary_counts']},indent=2))
+
+render_meta=read_json_limited(D/'render-metadata.json')
+image_paths=[];sidecar_paths=[];summaries=[]
+for i,az in enumerate(azimuths):
+ record={'schema':'world-memory.image.v1','view':'air-cast','presentation':False,'generatedAt':datetime.now(timezone.utc).isoformat(),
+         'units':{'world':'Minecraft blocks','image':'pixels','angles':'degrees','observedAt':'Unix milliseconds'},'source':compact_air_source(metadata,D/'metadata.json'),
+         'render':{**render_meta,'viewIndex':i,'azimuthDegrees':az,'pixels':[width,height],
+                   'annotations':read_json_limited(D/f'view-{i+1}-labels.json'),'axes':read_json_limited(D/f'view-{i+1}-axes.json'),
+                   'description':'White is selected known air; gold is known continuation beyond crop; purple meets unknown.',
+                   'coordinateTransform':'Minecraft(x,y,z) -> Blender(x,-z,y)','worldAxes':'X east, Y up, Z south; azimuth East=0, North=90'}}
+ image_path=D/f'view-{i+1}-raw.png';sidecar_path=D/(image_path.name+'.json')
+ text=json.dumps(record,allow_nan=False,indent=2)
+ if len(text.encode())>64*1024*1024:raise ValueError('Image metadata exceeds 64 MiB')
+ with sidecar_path.open('x') as f:f.write(text)
+ image_paths.append(str(image_path));sidecar_paths.append(str(sidecar_path));summaries.append(summarize(record))
+result={'images':image_paths,'metadata':sidecar_paths,'renderMetadata':str(D/'render-metadata.json'),'presentation':False,'summaries':summaries}
+with (D/'render-result.json').open('x') as f:json.dump(result,f,allow_nan=False)
+print(json.dumps(result))

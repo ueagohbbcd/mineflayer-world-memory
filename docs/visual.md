@@ -6,6 +6,44 @@ API is auxiliary and remains compatible. The consumer calls the CLI/JS exporter,
 calls an optional renderer, and displays the resulting PNG in its own UI.
 These tools run locally on cached data; `summary()` remains a text-only query.
 
+## Bare images and separate explanations
+
+The default PNG contains the scene itself. The surface view has textures and
+optional biome boundaries; its biome names/anchors are in metadata. Local 3D
+has no footer. Cave comparison is a direct horizontal join of the two unchanged,
+same-scale views, with no added cards, rulers or text. Cave surface grid and
+boundary-cap colors remain visible; their meanings are in the sidecar.
+
+Each PNG has a `<full-image-name>.json` sidecar: `surface.png.json` can coexist
+with the input `surface.json`. Both destinations are checked before saving;
+existing images/sidecars and source aliases are preserved. CLI success JSON
+returns `output`, `metadata`, `pixels`, `presentation` and a bounded `summary`
+with range, axes/view angles, scale, grid, display lighting, observation-time
+range and unknown-data counts. Models can interpret the image from that result;
+the sidecar provides optional detail. Per-column samples and per-face crop lists
+stay in their original snapshot/metadata files, linked by path and SHA-256,
+so each image sidecar carries counts and references rather than another copy
+of the full spatial arrays. Blender rendering
+returns the two raw image and sidecar paths plus shared render metadata.
+
+Sidecar schema `world-memory.image.v1` records view type, generation time, units,
+source identity/hashes and per-chunk observation times, rendering settings,
+geometry meaning, clipping and unknown semantics. Generation time is separate
+from source freshness. Surface `biomeRegions` contains each biome ID's largest
+connected region, name, world-space centroid/anchor and pixel anchor. The input
+snapshot retains the complete per-cell biome map. Cave panels provide image
+rectangles, opposite azimuths, equal elevation/scale, crop/unknown-cap semantics,
+projected coordinate ticks and annotations. Locations remain readable by a model
+without overlay text. PNG embedded metadata, where present, supplements the
+sidecar rather than replacing it.
+
+Use `--presentation` explicitly on `render-surface`, `render-local` or
+`compose-cave` for human-facing labels/footer/report layout. `compose-cave`
+defaults to `air-cast-comparison.png`; its presentation mode defaults to
+`air-cast-presentation.png`. Rendering bare and presentation variants uses new
+output names and the same cached geometry. Cave grid is controlled by render
+config `grid` (default true); surface has no grid mode.
+
 ## Setup and assets
 
 Core: Node 22+ recommended (library itself declares Node >=18; Mineflayer 4.39.0
@@ -39,7 +77,7 @@ Cave scene rendering additionally requires an explicit local Blender installatio
 with Cycles CPU support. There is no runtime download or permanent rendering
 service. NumPy/Pillow are for extraction/composition; Blender uses its bundled
 Python. Missing executables, modules, fonts or assets produce explicit errors.
-A caller-supplied CJK font supports Chinese biome labels; standard biome IDs/names remain available with the default font.
+A caller-supplied CJK font supports Chinese presentation labels; bare Chinese names need no font. standard biome IDs/names remain available with the default font.
 
 ## Read a real cache
 

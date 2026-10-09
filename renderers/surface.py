@@ -2,8 +2,9 @@
 Real atlas/model textures; native biome boundaries; no surface-grid mode.
 Plant symbols, fixed tints and partial-model approximations are deliberate.
 """
-import argparse,json,math,re,sys,time
+import argparse,json,math,re,sys,time,hashlib
 from pathlib import Path
+from image_output import output_paths, image_metadata, write_pair
 from collections import Counter,deque
 from functools import lru_cache
 import numpy as np
@@ -25,7 +26,7 @@ def validate(args):
  if output==assets or assets in output.parents:raise ValueError('Output must be outside asset directory')
  if not assets.is_dir():raise ValueError('Assets must be a Prismarine-viewer public directory')
  if args.font is not None and not args.font.is_file():raise ValueError('Font file does not exist')
- if args.label_language=='zh' and args.font is None:raise ValueError('Chinese labels require an explicit CJK --font file')
+ if args.presentation and args.label_language=='zh' and args.font is None:raise ValueError('Chinese labels require an explicit CJK --font file')
  j=json.loads(source.read_text())
  if not isinstance(j,dict) or j.get('schema')!='world-memory.surface-map.v1':raise ValueError('Unsupported surface snapshot schema')
  version=j.get('version')
@@ -72,6 +73,7 @@ def validate(args):
  if not isinstance(registry,dict) or any(not isinstance(v,dict) or (v.get('name') is not None and not isinstance(v['name'],str)) for v in registry.values()):raise ValueError('Invalid biome registry')
  for f in (assets/f'blocksStates/{version}.json',assets/f'textures/{version}.png'):
   if not f.is_file():raise ValueError(f'Missing version-matched asset: {f.name}')
+ output_paths(args.output, protected_files=[source], protected_dirs=[assets])
  return j,assets
 
 def largest_region_anchor(a,id):
@@ -109,7 +111,7 @@ def main():
  p=argparse.ArgumentParser(description='Render native cached surfaces without a live game connection')
  p.add_argument('--input',required=True,type=Path);p.add_argument('--assets',required=True,type=Path);p.add_argument('--output',required=True,type=Path)
  p.add_argument('--version');p.add_argument('--scale',type=int,choices=range(1,17),default=8)
- p.add_argument('--mode',choices=['texture','hillshade'],default='texture');p.add_argument('--biomes',action='store_true');p.add_argument('--font',type=Path);p.add_argument('--label-language',choices=['en','zh'],default='en')
+ p.add_argument('--mode',choices=['texture','hillshade'],default='texture');p.add_argument('--biomes',action='store_true');p.add_argument('--font',type=Path);p.add_argument('--label-language',choices=['en','zh'],default='en');p.add_argument('--presentation',action='store_true',help='Draw biome names; default puts spatial labels in the JSON sidecar')
  args=p.parse_args();j,assets=validate(args)
  X0,X1,Z0,Z1=[j[k] for k in ['X0','X1','Z0','Z1']];shape=(Z1-Z0+1,X1-X0+1)
  models=json.loads((assets/f'blocksStates/{args.version}.json').read_text())
@@ -219,6 +221,7 @@ def main():
   rgb[water]=[73,136,173];rgb[~np.isfinite(ground)]=[204,210,211]
   main=Image.fromarray(np.uint8(rgb)).resize(main.size,Image.Resampling.NEAREST)
  S=args.scale
+ biome_regions=[]
  if args.biomes:
   a=np.full(shape,-1,int)
   for x,z,layers,*extra in j['cells']:
@@ -228,24 +231,38 @@ def main():
    d.line(((x+1)*S,z*S,(x+1)*S,(z+1)*S),fill='#182c33',width=3);d.line(((x+1)*S,z*S,(x+1)*S,(z+1)*S),fill='#e9dfb1',width=1)
   for z,x in zip(*np.where((a[1:,:]!=a[:-1,:])&(a[1:,:]>=0)&(a[:-1,:]>=0))):
    d.line((x*S,(z+1)*S,(x+1)*S,(z+1)*S),fill='#182c33',width=3);d.line((x*S,(z+1)*S,(x+1)*S,(z+1)*S),fill='#e9dfb1',width=1)
-  font=ImageFont.truetype(str(args.font) if args.font else 'DejaVuSans.ttf',max(10,3*S))
+  font=ImageFont.truetype(str(args.font) if args.font else 'DejaVuSans.ttf',max(10,3*S)) if args.presentation else None
   placed=[]
   for id in sorted(set(a.ravel())-{-1}):
    region,point=largest_region_anchor(a,id)
-   if len(region)<100:continue
    z,x=point
    name=j.get('biomeRegistry',{}).get(str(id),{}).get('name') or f'biome_id_{id}'
    if args.label_language=='zh':name=CHINESE.get(name,name)
+   biome_regions.append({'id':int(id),'name':name,'scope':'largest connected component for this biome ID','columns':len(region),'anchorXZ':[X0+int(x),Z0+int(z)],'anchorPixel':[(int(x)+.5)*S,(int(z)+.5)*S],'centroidXZ':[X0+sum(p[1] for p in region)/len(region),Z0+sum(p[0] for p in region)/len(region)]})
+   if not args.presentation or len(region)<100:continue
    w=d.textlength(name,font=font);fh=font.getbbox(name)[3]+4
    if w+8>main.width:continue
    px=max(w/2+4,min(main.width-w/2-4,(x+.5)*S));py=max(2,min(main.height-fh-2,(z+.5)*S))
    box=(px-w/2-4,py-2,px+w/2+4,py+fh+2)
    if any(not(box[2]<q[0] or box[0]>q[2] or box[3]<q[1] or box[1]>q[3]) for q in placed):continue
    d.text((px-w/2,py),name,font=font,fill='#fff5cf',stroke_width=2,stroke_fill='#182c33');placed.append(box)
- args.output.parent.mkdir(parents=True,exist_ok=True)
- # Exclusive creation closes overwrite races; invalid input/assets never create output.
- with args.output.open('xb') as output:main.save(output,format='PNG')
- print(json.dumps({'output':str(args.output),'seconds':round(time.perf_counter()-t0,3),'pixels':list(main.size),'unresolved_materials':dict(fallbacks),'surface_y_biomes':args.biomes,'model_symbol_types':dict(symbols)}))
+ source={k:j.get(k) for k in ('worldId','dimension','version','y','chunks','biomeRegistry','maxLayers')}
+ source['columnCounts']=dict(Counter(c[2] for c in j.get('columnStatus') or []))
+ if not source['columnCounts']:
+  known=sum(bool(c[2]) for c in j['cells']);source['columnCounts']={'surface':known,'empty':len(j['cells'])-known,'partial':0,'unknown':shape[0]*shape[1]-len(j['cells'])}
+ source['columnDetails']='Read cells and columnStatus in the referenced snapshot for exact per-column data'
+ source['snapshot']=str(args.input)
+ source['snapshotSha256']=hashlib.sha256(args.input.read_bytes()).hexdigest()
+ source['boundsXZ']=[X0,X1,Z0,Z1]
+ source['unknownIsAir']=False
+ render={'mode':args.mode,'pixels':list(main.size),'pixelsPerBlock':S,'orientation':'north=-Z (up), east=+X (right)',
+         'lighting':'display hillshade','biomeSampling':j.get('biomeSampling'),'biomeBoundaries':args.biomes,
+         'biomeRegions':biome_regions,'grid':False,'unknownColor':[204,210,211],
+         'description':'Highest visible cached surfaces; grey marks unknown or empty columns, exact column status is in the referenced snapshot.',
+         'textureApproximation':'Static real textures, fixed vegetation/water tint, top-face projection and plant symbols',
+         'unresolvedMaterials':dict(fallbacks),'modelSymbolTypes':dict(symbols)}
+ result=write_pair(main,args.output,image_metadata('surface',args.presentation,source,render),protected_files=[args.input],protected_dirs=[assets])
+ print(json.dumps({**result,'seconds':round(time.perf_counter()-t0,3),'unresolved_materials':dict(fallbacks),'surface_y_biomes':args.biomes,'model_symbol_types':dict(symbols)}))
 
 if __name__=='__main__':
  try:main()

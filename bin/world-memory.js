@@ -42,5 +42,13 @@ async function main () {
     child.on('error', e => reject(new Error(`${executable} unavailable: ${e.message}. Install the optional renderer dependencies in docs/visual.md`)))
     child.on('close', (code, signal) => { if (code === 0) resolve(); else reject(new Error(`${command} failed (${signal || code})`)) })
   })
+  if (blender) {
+    const at = args.indexOf('--workdir'), dir = at >= 0 ? args[at + 1] : args.find(v => v.startsWith('--workdir='))?.slice(10)
+    if (dir) {
+      const result = path.join(dir, 'render-result.json')
+      if ((await fs.stat(result)).size > 65536) throw new Error('Render result exceeds summary size limit')
+      console.log(JSON.stringify(JSON.parse(await fs.readFile(result, 'utf8'))))
+    }
+  }
 }
 main().catch(e => { console.error(`world-memory: ${e.message}`); process.exitCode = 1 })

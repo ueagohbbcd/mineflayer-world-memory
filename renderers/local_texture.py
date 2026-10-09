@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from image_output import output_paths, image_metadata, write_pair
 
 import numpy as np
 from PIL import Image, ImageDraw, PngImagePlugin
@@ -166,24 +167,32 @@ def main(argv=None):
     p.add_argument('--height', type=int, default=720)
     p.add_argument('--scale', type=int, default=1)
     p.add_argument('--fov', type=float, default=40)
+    p.add_argument('--presentation', action='store_true', help='Add a human-readable footer; default writes a bare image and JSON sidecar')
     a = p.parse_args(argv)
     mesh, metadata, texture, assets = load_mesh(a.mesh_dir, a.assets)
     output = safe_output(a.output, [a.mesh_dir, assets])
+    output_paths(output, protected_dirs=[a.mesh_dir, assets])
     im, info = render(mesh, texture, metadata['lo'], metadata['hi'], eye=a.eye, target=a.target, width=a.width, height=a.height, scale=a.scale, fov=a.fov)
-    # Always visible provenance, even if the PNG metadata is stripped downstream.
-    labelled = Image.new('RGB', (im.width, im.height + 66), '#101722')
-    labelled.paste(im, (0, 0)); draw = ImageDraw.Draw(labelled)
-    for i, line in enumerate(['ROI cut-away | outside remains unobserved in this view',
-                              'Fixed display lighting / illustrative biome tint',
-                              'Native cache is source of truth | Check clearance separately']):
-        draw.text((8, im.height+6+i*18), line, fill='#d6dfeb')
+    labelled = im
+    if a.presentation:
+        labelled = Image.new('RGB', (im.width, im.height + 66), '#101722')
+        labelled.paste(im, (0, 0)); draw = ImageDraw.Draw(labelled)
+        for i, line in enumerate(['ROI cut-away | outside remains unobserved in this view',
+                                  'Fixed display lighting / illustrative biome tint',
+                                  'Native cache is source of truth | Check clearance separately']):
+            draw.text((8, im.height+6+i*18), line, fill='#d6dfeb')
     info['imageSize'] = list(labelled.size)
+    delta = np.asarray(info['eye']) - np.asarray(info['target'])
+    info['azimuthDegrees'] = math.degrees(math.atan2(-delta[2], delta[0])) % 360
+    info['elevationDegrees'] = math.degrees(math.atan2(delta[1], math.hypot(delta[0], delta[2])))
+    info['lighting'] = 'Neutral display light and model ambient occlusion'
+    info['worldAxes'] = 'X east, Y up, Z south; azimuth East=0, North=90'
+    info['description'] = 'Textured ROI cut-away. Exterior is omitted; scene uses display lighting and fixed biome tint.'
+    record = image_metadata('local-texture', a.presentation, metadata, info)
     pnginfo = PngImagePlugin.PngInfo()
-    pnginfo.add_text('world-memory', json.dumps({'source': metadata, 'render': info}))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open('xb') as f:
-        labelled.save(f, format='PNG', pnginfo=pnginfo)
-    print(json.dumps({'output': str(output), **info}))
+    pnginfo.add_text('world-memory', json.dumps(record))
+    result = write_pair(labelled, output, record, protected_dirs=[a.mesh_dir, assets], pnginfo=pnginfo)
+    print(json.dumps({**result, **info}))
     return info
 
 
