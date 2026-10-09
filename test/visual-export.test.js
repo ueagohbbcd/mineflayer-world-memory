@@ -1,0 +1,106 @@
+'use strict'
+const test = require('node:test'), assert = require('node:assert/strict')
+const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), zlib = require('node:zlib'), crypto = require('node:crypto')
+const { execFileSync } = require('node:child_process')
+const { openCache, surface, region, exportSurface, exportRegion } = require('../lib/visual')
+const registry = require('prismarine-registry')('1.21.1'), Chunk = require('prismarine-chunk')('1.21.1')
+async function fixture (t) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'visual-export-')); t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const directory = path.join(dir, 'cache'), worldId = 'synthetic-world', scope = path.join(directory, Buffer.from(worldId).toString('base64url'))
+  await fs.mkdir(scope, { recursive: true })
+  const column = new Chunk({ minY: -16, worldHeight: 32 })
+  const put = (x, y, z, name) => column.setBlockStateId({ x, y, z }, registry.blocksByName[name].minStateId)
+  for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) put(x, -4, z, 'stone')
+  put(0, 4, 0, 'oak_leaves'); put(1, 3, 0, 'water'); put(2, 2, 0, 'short_grass')
+  column.setBiome({ x: 0, y: 4, z: 0 }, registry.biomesByName.forest.id)
+  column.setBiome({ x: 0, y: -4, z: 0 }, registry.biomesByName.desert.id)
+  column.setBiome({ x: 4, y: -4, z: 0 }, registry.biomesByName.plains.id)
+  const file = path.join(scope, `${Buffer.from('overworld').toString('base64url')}_-1_0.json.gz`)
+  const data = { version: '1.21.1', dimension: 'overworld', x: -1, z: 0, observedAt: 123456, json: column.toJson() }
+  const save = () => fs.writeFile(file, zlib.gzipSync(JSON.stringify(data)))
+  await save()
+  return { dir, scope, file, data, save, config: { directory, worldId, dimension: 'overworld', version: '1.21.1' } }
+}
+test('surface preserves negative coordinates, highest visible layers, native biome Y and missing chunks', async t => {
+  const f = await fixture(t), s = await surface(await openCache(f.config), { bounds: [-16, 1, 0, 0] })
+  assert.deepEqual(s.cells[0].slice(0, 2), [-16, 0]); assert.equal(s.cells[0][2][0][0], 4)
+  assert.equal(s.cells[0][3], registry.biomesByName.forest.id)
+  assert.equal(s.cells[4][3], registry.biomesByName.plains.id)
+  assert.equal(s.cells[0][4], -4); assert.equal(s.cells[0][2].length, 2)
+  assert.equal(s.cells[1][2].length, 1); assert.equal(s.states[s.cells[1][2][0][1]].name, 'water')
+  assert.equal(s.cells.length, 16); assert.deepEqual(s.columnStatus.slice(-2).map(c => c[2]), ['unknown', 'unknown'])
+  assert.equal(s.chunks[0].observedAt, 123456); assert.match(s.chunks[0].sha256, /^[a-f0-9]{64}$/)
+})
+test('missing native sections, out-of-height samples and biome palettes stay unknown', async t => {
+  const f = await fixture(t), raw = JSON.parse(f.data.json); raw.sections[1] = null; raw.biomes[0] = null; f.data.json = JSON.stringify(raw); await f.save()
+  const s = await surface(await openCache(f.config), { bounds: [-16, -16, 0, 0] })
+  assert.equal(s.columnStatus[0][2], 'unknown'); assert.deepEqual(s.cells[0][2], [])
+  const cut = await surface(await openCache(f.config), { bounds: [-16, -16, 0, 0], y: [-16, -1] })
+  assert.equal(cut.cells[0][2][0][0], -4); assert.equal(cut.cells[0][3], null)
+  const r = await region(await openCache(f.config), { min: [-16, -17, 0], max: [-16, 0, 0] })
+  assert.equal(r.metadata.unknownVoxels, 2); assert.equal(r.stateData.readInt32LE(0), -1); assert.equal(r.stateData.readInt32LE(17 * 4), -1)
+})
+test('region XYZ Z-fastest binary keeps state IDs and unknown palette independent of known air', async t => {
+  const f = await fixture(t), r = await region(await openCache(f.config), { min: [-1, -4, 0], max: [0, -3, 1] })
+  assert.deepEqual(r.metadata.shape, [2, 2, 2]); assert.equal(r.metadata.unknownVoxels, 4)
+  assert.equal(r.metadata.palette[r.data.readUInt16LE(0)], 'stone')
+  assert.equal(r.metadata.palette[r.data.readUInt16LE(4)], 'air')
+  assert.equal(r.stateData.readInt32LE(0), registry.blocksByName.stone.minStateId)
+  assert.equal(r.data.readUInt16LE(8), 0); assert.equal(r.stateData.readInt32LE(16), -1)
+})
+test('version/dimension/coordinate mismatches and malformed cache fail before writing', async t => {
+  const f = await fixture(t)
+  for (const [key, bad] of [['version', '1.20.1'], ['dimension', 'the_nether'], ['x', 1]]) {
+    const original = f.data[key]; f.data[key] = bad; await f.save()
+    await assert.rejects(exportSurface({ ...f.config, bounds: [-16, -16, 0, 0], output: path.join(f.dir, key + '.json') }), /mismatch/)
+    f.data[key] = original
+  }
+  await fs.writeFile(f.file, 'not gzip')
+  await assert.rejects(exportSurface({ ...f.config, bounds: [-16, -16, 0, 0], output: path.join(f.dir, 'broken.json') }))
+})
+test('exports refuse existing outputs, cache descendants and symlink aliases without changing source', async t => {
+  const f = await fixture(t), hash = b => crypto.createHash('sha256').update(b).digest('hex'), before = hash(await fs.readFile(f.file))
+  const alias = path.join(f.dir, 'alias'); await fs.symlink(f.scope, alias)
+  for (const output of [f.file, path.join(f.scope, 'new.json'), path.join(alias, 'new.json')]) await assert.rejects(exportSurface({ ...f.config, bounds: [-16, -16, 0, 0], output }), /cache/)
+  const output = path.join(f.dir, 'surface.json')
+  await exportSurface({ ...f.config, bounds: [-16, -16, 0, 0], output })
+  await assert.rejects(exportSurface({ ...f.config, bounds: [-16, -16, 0, 0], output }), /exists/)
+  const regionOut = path.join(f.dir, 'region')
+  await exportRegion({ ...f.config, min: [-16, -4, 0], max: [-15, -3, 1], output: regionOut })
+  assert.equal((await fs.readFile(path.join(regionOut, 'region.u16'))).length, 16)
+  await assert.rejects(exportRegion({ ...f.config, min: [-16, -4, 0], max: [-15, -3, 1], output: regionOut }), /exists/)
+  assert.equal(hash(await fs.readFile(f.file)), before)
+})
+test('limits reject inverted/fractional/huge sampling and layer counts', async t => {
+  const f = await fixture(t), cache = await openCache(f.config)
+  for (const bounds of [[1, 0, 0, 0], [0, 0.5, 0, 0], [0, 100000, 0, 100000]]) await assert.rejects(surface(cache, { bounds }))
+  await assert.rejects(surface(cache, { bounds: [0, 0, 0, 0], maxLayers: 0 }))
+  await assert.rejects(region(cache, { min: [0, 0, 0], max: [1000, 1000, 1000] }))
+})
+test('CLI config-relative paths work without depending on the current directory', async t => {
+  const f = await fixture(t), configPath = path.join(f.dir, 'export.json')
+  await fs.writeFile(configPath, JSON.stringify({ ...f.config, directory: './cache', output: './map.json', bounds: [-16, -15, 0, 1] }))
+  const result = JSON.parse(execFileSync(process.execPath, [path.resolve(__dirname, '../bin/world-memory.js'), 'surface', '--config', configPath], { cwd: os.tmpdir(), encoding: 'utf8' }))
+  assert.equal(result.output, path.join(f.dir, 'map.json')); assert.match(result.next, /render-surface/)
+})
+
+test('surface sample and accumulated layer budgets stop before unbounded allocation', async t => {
+  const f = await fixture(t)
+  await assert.rejects(surface(await openCache(f.config), { bounds: [-16, -16, 0, 0], maxSamples: 1 }), /sample budget/)
+  await assert.rejects(surface(await openCache(f.config), { bounds: [-16, -16, 0, 0], maxTotalLayers: 1 }), /layer budget/)
+})
+
+test('custom registry must match the declared Minecraft version', async t => {
+  const f = await fixture(t)
+  await assert.rejects(openCache({ ...f.config, registry: require('prismarine-registry')('1.20.1') }), /Registry Minecraft version/)
+})
+test('reusing an open cache keeps provenance and state tables scoped to each result', async t => {
+  const f = await fixture(t), cache = await openCache(f.config)
+  const first = await surface(cache, { bounds: [-16, -16, 0, 0] })
+  const saved = JSON.stringify(first)
+  const second = await surface(cache, { bounds: [0, 0, 0, 0] })
+  assert.deepEqual(second.chunks, []); assert.deepEqual(second.states, {})
+  const third = await region(cache, { min: [-1, -4, 0], max: [-1, -4, 0] })
+  assert.equal(third.metadata.stamps.length, 1); assert.equal(Object.keys(third.metadata.states).length, 1)
+  assert.equal(JSON.stringify(first), saved)
+})

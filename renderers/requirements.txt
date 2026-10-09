@@ -1,0 +1,3 @@
+# Optional offline renderers; explicitly install, never installed by the CLI.
+numpy==2.3.5
+Pillow==12.3.0

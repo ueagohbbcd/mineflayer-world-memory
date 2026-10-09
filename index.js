@@ -7,6 +7,20 @@ const gzip = promisify(zlib.gzip), gunzip = promisify(zlib.gunzip)
 const yieldTurn = () => new Promise(resolve => setImmediate(resolve))
 const key = (x, z) => `${x},${z}`
 
+function surfaceStatistics (heights, states) {
+  let columns = 0, emptyColumns = 0, unknownColumns = 0, mean = 0, m2 = 0, min = Infinity, max = -Infinity
+  for (let i = 0; i < 256; i++) {
+    if (states[i] === 0) { emptyColumns++; continue }
+    if (states[i] === 2) { unknownColumns++; continue }
+    const y = heights[i], delta = y - mean
+    columns++; mean += delta / columns; m2 += delta * (y - mean)
+    min = Math.min(min, y); max = Math.max(max, y)
+  }
+  return { columns, emptyColumns, unknownColumns, coverage: columns / 256,
+    minY: columns ? min : null, maxY: columns ? max : null, meanY: columns ? mean : null,
+    relief: columns ? max - min : null, stddev: columns ? Math.sqrt(Math.max(0, m2 / columns)) : null }
+}
+
 function coverageRectangles (coordinates) {
   function runs (swap) {
     const rows = new Map(), result = [], active = new Map()
@@ -40,12 +54,18 @@ function coverageRectangles (coordinates) {
 async function classify (column, registry) {
   const minY = column.minY ?? -64, height = column.worldHeight ?? 384, n = height * 256
   const types = new Uint16Array(n), labels = new Uint32Array(n), transparent = new Uint8Array(n)
+  const surfaceHeights = new Float64Array(256), surfaceStates = new Uint8Array(256)
   const p = { x: 0, y: 0, z: 0 }
   for (let i = 0; i < n; i++) {
     p.x = i & 15; p.z = (i >> 4) & 15; p.y = (i >> 8) + minY
     const state = column.getBlockStateId(p), block = registry.blocksByStateId[state]
     types[i] = block?.id ?? 65535
     transparent[i] = block && (block.transparent === true || block.boundingBox === 'empty') ? 1 : 0
+    // The existing scan is bottom-up. A known non-air block supersedes anything
+    // below it; an unknown state above it prevents claiming a known top surface.
+    const horizontal = i & 255
+    if (!block) surfaceStates[horizontal] = 2
+    else if (block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') { surfaceHeights[horizontal] = p.y; surfaceStates[horizontal] = 1 }
     if ((i & 4095) === 4095) await yieldTurn()
   }
   const queue = new Uint32Array(n), sky = []; let components = 0
@@ -63,7 +83,7 @@ async function classify (column, registry) {
     }
     if (top) sky.push(label)
   }
-  return { minY, height, types, labels, components, sky }
+  return { minY, height, types, labels, components, sky, surface: surfaceStatistics(surfaceHeights, surfaceStates) }
 }
 
 function createWorldMemory (bot, options = {}) {
@@ -217,7 +237,8 @@ function createWorldMemory (bot, options = {}) {
         }
         for (const [name, value] of Object.entries(counts)) total[name] = (total[name] || 0) + value
         const current = [...records.values()].filter(r => r.loaded)
-        output[d] = { blockCounts: counts, coverage: coverageRectangles(coordinates), currentCoverage: coverageRectangles(current), chunks: records.size, loadedChunks: current.length, lastObservedAt: Math.max(0, ...[...records.values()].map(r => r.observedAt)) }
+        const chunkSummaries = [...records.values()].map(r => ({ x: r.x, z: r.z, loaded: r.loaded, observedAt: r.observedAt, surface: r.analysis.surface }))
+        output[d] = { blockCounts: counts, coverage: coverageRectangles(coordinates), currentCoverage: coverageRectangles(current), chunks: records.size, loadedChunks: current.length, lastObservedAt: Math.max(0, ...[...records.values()].map(r => r.observedAt)), chunkSummaries }
       }
       snapshot = { revision: target, dimensions: output, blockCounts: total }; computedRevision = target
       await persist()
@@ -273,4 +294,4 @@ function createWorldMemory (bot, options = {}) {
     },
     dispose }
 }
-module.exports = { createWorldMemory, coverageRectangles }
+module.exports = { createWorldMemory, coverageRectangles, visual: require('./lib/visual') }

@@ -8,12 +8,32 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:visual": "python3 -m unittest discover -s test -p \"visual_*_test.py\""
   },
   "dependencies": {
-    "prismarine-chunk": "^1.41.0"
+    "prismarine-chunk": "^1.41.0",
+    "prismarine-registry": "^1.1.0",
+    "prismarine-block": "^1.23.0"
   },
   "peerDependencies": {
     "mineflayer": ">=4.39.0 <5"
+  },
+  "bin": {
+    "world-memory": "bin/world-memory.js"
+  },
+  "files": [
+    "index.js",
+    "lib/*.js",
+    "bin/*.js",
+    "renderers/*.py",
+    "renderers/requirements.txt",
+    "docs/*.md",
+    "README.md",
+    "LICENSE",
+    "examples/*.js"
+  ],
+  "devDependencies": {
+    "mineflayer": "4.39.0"
   }
 }
