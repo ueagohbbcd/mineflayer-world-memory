@@ -9,6 +9,8 @@ import unittest
 import numpy as np
 from PIL import Image
 
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'renderers'))
 spec = importlib.util.spec_from_file_location('local_texture', Path(__file__).parents[1] / 'renderers/local_texture.py')
 local = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(local)
@@ -45,11 +47,22 @@ class LocalTextureTests(unittest.TestCase):
             meta = json.loads(im.info['world-memory'])
             self.assertEqual(meta['source']['version'], '1.21.1')
             self.assertGreater(meta['render']['geometryPixels'], 0)
-            self.assertEqual(im.size, (256, 322))
+            self.assertEqual(im.size, (256, 256))
+        sidecar=json.loads(output.with_name(output.name+'.json').read_text())
+        self.assertEqual(sidecar['render']['imageSize'], [256,256])
+        self.assertFalse(sidecar['presentation'])
+        self.assertEqual(sidecar['units']['world'],'Minecraft blocks')
+        self.assertIn('azimuthDegrees',sidecar['render'])
         for p, b in before.items():
             self.assertEqual(p.read_bytes(), b)
         with self.assertRaisesRegex(ValueError, 'already exists'):
             local.main(['--mesh-dir', str(self.meshdir), '--output', str(output)])
+
+    def test_presentation_is_explicit(self):
+        output=self.root/'report.png'
+        local.main(['--mesh-dir',str(self.meshdir),'--output',str(output),'--width','256','--height','256','--presentation'])
+        with Image.open(output) as im:self.assertEqual(im.size,(256,322))
+        self.assertTrue(json.loads(output.with_name(output.name+'.json').read_text())['presentation'])
 
     def test_output_safety_and_atlas_hash(self):
         with self.assertRaisesRegex(ValueError, 'outside'):

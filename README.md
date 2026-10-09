@@ -22,6 +22,14 @@ read-only. Unknown areas stay distinct from known air. Cached observations may
 be stale; check their timestamps. Text summaries remain API-compatible, with
 rendering invoked separately.
 
+### Model-facing images
+
+Renderers default to bare PNGs. Cave comparisons join the two views directly at
+the same scale. Image meaning, coordinates, orientation, source observation times,
+biome anchors and legends are written beside each PNG as `<image>.png.json`.
+The CLI returns both paths. Use `--presentation` for human-facing labels or
+report layouts. Surface maps stay grid-free; cave grids remain on by default.
+
 ### Start a visual inspection
 
 ```sh

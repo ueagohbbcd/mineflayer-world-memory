@@ -55,10 +55,10 @@ culling assumption; output positions are translated back to original world Y.
 Raster stage accepts `--mesh-dir`, `--output`, optional `--assets`, `--eye X Y Z`,
 `--target X Y Z`, `--width`, `--height`, `--scale` (1–3 supersampling), and `--fov`
 (10–120 degrees). Defaults are a bounds-derived overview, 960×720 viewport,
-scale 1, and 40° vertical field of view. A provenance footer is added beneath the
-viewport. PNG text metadata (`world-memory`) includes camera coordinates,
+scale 1, and 40° vertical field of view. The default PNG is exactly the viewport size. `--presentation` adds a
+provenance footer beneath it. The `<image>.png.json` sidecar and PNG text metadata (`world-memory`) include camera coordinates,
 source/asset hashes, observation stamps, lighting, triangle/pixel counts, and
-limitations. stdout reports render metrics. This view is grid-free.
+limitations. stdout reports the image/sidecar paths and render metrics. This view is grid-free.
 For underground shape inspection with a grid, use the separate air-cast renderer.
 
 ## Meaning and limits

@@ -7,6 +7,8 @@ from PIL import Image
 import numpy as np
 
 SCRIPT=Path(__file__).resolve().parents[1]/'renderers'/'surface.py'
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'renderers'))
 spec=importlib.util.spec_from_file_location('surface_renderer',SCRIPT);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 class SurfaceRendererTest(unittest.TestCase):
  def setUp(self):
@@ -28,7 +30,7 @@ class SurfaceRendererTest(unittest.TestCase):
  def test_real_texture_alpha_and_unknown_mask(self):
   self.run_cli();a=np.array(Image.open(self.output));self.assertEqual(a.shape,(16,48,3));self.assertTrue(np.all(a[:,32:]==[204,210,211]));self.assertFalse(np.array_equal(a[0,0],a[0,1]));self.assertGreater(a[0,16,2],a[0,16,0]);self.assertGreater(a[0,22,0],a[0,22,2])
  def test_unknown_biomes_do_not_create_boundary(self):
-  self.run_cli();base=self.output.read_bytes();self.output.unlink();self.run_cli('--biomes');self.assertEqual(base,self.output.read_bytes())
+  self.run_cli();base=self.output.read_bytes();self.output.unlink();self.output.with_name(self.output.name+'.json').unlink();self.run_cli('--biomes');self.assertEqual(base,self.output.read_bytes())
  def test_hillshade_uses_natural_height_and_preserves_unknown(self):
   self.run_cli('--mode','hillshade');a=np.array(Image.open(self.output));self.assertTrue(np.all(a[:,:16]==a[:,16:32]));self.assertTrue(np.all(a[:,32:]==[204,210,211]))
  def test_missing_material_is_error_not_fake_color(self):
@@ -52,16 +54,27 @@ class SurfaceRendererTest(unittest.TestCase):
  def test_duplicate_cell(self):self.snapshot['cells'].append(copy.deepcopy(self.snapshot['cells'][0]));self.run_cli(success=False)
  def test_unknown_state(self):self.snapshot['cells'][0][2][0][1]=999;self.run_cli(success=False)
  def test_unknown_status_cannot_contain_layers(self):self.snapshot['columnStatus'][0][2]='unknown';self.run_cli(success=False)
- def test_chinese_requires_font(self):self.run_cli('--biomes','--label-language','zh',success=False)
+ def test_chinese_requires_font(self):self.run_cli('--biomes','--label-language','zh','--presentation',success=False)
  def test_biome_component_anchor_without_scipy(self):
   a=np.full((16,16),-1);a[1:14,1:14]=4;a[15,15]=4;region,anchor=module.largest_region_anchor(a,4);self.assertEqual(len(region),169);self.assertEqual(anchor,(7,7))
  def test_biome_sparse_overlay(self):
   self.snapshot.update(X0=0,X1=23,Z0=0,Z1=11);self.snapshot['cells']=[[x,z,[[64,1]],4 if x<12 else 5,64] for z in range(12) for x in range(24)];self.snapshot['columnStatus']=[];self.snapshot['biomeRegistry']={'4':{'name':'forest'},'5':{'name':'plains'}}
   self.run_cli('--biomes')
   with Image.open(self.output) as image:self.assertEqual(image.size,(384,192))
+ def test_bare_biome_labels_are_in_sidecar(self):
+  self.snapshot.update(X0=0,X1=23,Z0=0,Z1=11);self.snapshot['cells']=[[x,z,[[64,1]],4 if x<12 else 5,64] for z in range(12) for x in range(24)];self.snapshot['columnStatus']=[];self.snapshot['biomeRegistry']={'4':{'name':'forest'},'5':{'name':'plains'}}
+  self.run_cli('--biomes','--label-language','zh')
+  meta=json.loads(self.output.with_name(self.output.name+'.json').read_text());self.assertFalse(meta['presentation']);self.assertEqual(meta['render']['pixels'],[384,192]);self.assertEqual(len(meta['render']['biomeRegions']),2)
+  self.assertIn('anchorXZ',meta['render']['biomeRegions'][0]);self.assertIn('centroidXZ',meta['render']['biomeRegions'][0]);self.assertIn('generatedAt',meta);self.assertNotIn('columnStatus',meta['source']);self.assertEqual(meta['source']['columnCounts']['surface'],288);self.assertEqual(len(meta['source']['snapshotSha256']),64)
+  with Image.open(self.output) as im:bare=im.copy()
+  report=self.root/'presentation.png';self.run_cli('--biomes','--presentation',output=report)
+  with Image.open(report) as im:self.assertNotEqual(bare.tobytes(),im.tobytes())
+ def test_same_basename_input_and_png_use_separate_sidecar(self):
+  output=self.source.with_suffix('.png');self.run_cli(output=output)
+  self.assertEqual(json.loads(self.source.read_text())['schema'],'world-memory.surface-map.v1');self.assertTrue(output.with_name(output.name+'.json').exists())
  def validate_with_budget(self,key,value):
   self.source.write_text(json.dumps(self.snapshot))
-  args=SimpleNamespace(input=self.source,output=self.output,assets=self.assets,font=None,label_language='en',version=None,scale=16)
+  args=SimpleNamespace(input=self.source,output=self.output,assets=self.assets,font=None,label_language='en',presentation=False,version=None,scale=16)
   with patch.object(module,key,value):return module.validate(args)
  def test_column_budget_exact_boundary(self):
   self.validate_with_budget('MAX_COLUMNS',3)
