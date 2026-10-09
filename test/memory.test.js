@@ -81,6 +81,7 @@ test('background work completes and updates received during refresh do not inval
   for (let i = 0; i < 100 && memory.summary().pending; i++) await new Promise(resolve => setTimeout(resolve, 10))
   assert.equal(memory.summary().pending, false)
   assert.equal(memory.summary().blockCounts.dirt, 1)
+  assert.equal(memory.summary().dimensions.overworld.chunkSummaries[0].surface.meanY, 90)
   const before = memory.summary().revision
   assert.equal(memory.summary().revision, before)
   await memory.dispose()
@@ -122,6 +123,7 @@ test('received same-object native map_chunk invalidates indexes and persistence 
     assert.equal(memory.summary().pending, true)
     assert.equal((await memory.find({ name: 'nether_portal' })).total, 1)
     assert(memory.summary().revision > before)
+    assert.equal(memory.summary().dimensions.overworld.chunkSummaries[0].surface.maxY, 90)
     await memory.dispose()
     const restored = createWorldMemory(fixture(new Map()), { directory, worldId: 'reload' })
     try { assert.equal((await restored.find({ name: 'nether_portal' })).total, 1) } finally { await restored.dispose() }
