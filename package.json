@@ -37,7 +37,9 @@
     "live.js",
     "live.mjs",
     "queries.js",
-    "queries.mjs"
+    "queries.mjs",
+    "watchdog.js",
+    "watchdog.mjs"
   ],
   "devDependencies": {
     "mineflayer": "4.39.0"

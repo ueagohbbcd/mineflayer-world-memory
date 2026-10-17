@@ -82,6 +82,10 @@ null statistics for empty/unknown surfaces. Check buildability locally.
 See [memory API, persistence, exposure and height definitions](docs/memory-api.md).
 Live bot installation, consumer dependency upgrades and deployment are separate steps.
 
+## Watchdog
+
+`watchdog(bot, { report })` (from `watchdog.js` / `watchdog.mjs`) reports a bot that is stuck, a program that keeps retrying the same thing, and a program blocked by a synchronous loop. It only reads Mineflayer state. See [watchdog](docs/watchdog.md).
+
 ## Tests
 
 ```sh
